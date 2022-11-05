@@ -17,10 +17,10 @@ import org.sjbcp.code.CodeWriter;
 class CodeWrapper implements CodeWriter {
 
     List<CodeWrapperInstance> list = new ArrayList();
-    
+
     public CodeWrapper() {
     }
-    
+
     public void addEntry(String className, String methodName, String pre, String post, boolean isNew) {
         list.add(new CodeWrapperInstance(className, methodName, pre, post, isNew));
     }
@@ -31,15 +31,15 @@ class CodeWrapper implements CodeWriter {
 
     @Override
     public void init(SJBCP sjbcp) {
-        
+
     }
 
     @Override
     public boolean needInstrument(String className) {
         for (CodeWrapperInstance ci : list) {
-            if (ci.className != null && 
-                    ci.className.replaceAll("/", ".")
-                    .equals(className.replaceAll("/", ".")) && !ci.aNew) {
+            if (ci.className != null &&
+                    ci.className.replace("/", ".")
+                    .equals(className.replace("/", ".")) && !ci.aNew) {
                 return true;
             }
         }
@@ -54,9 +54,10 @@ class CodeWrapper implements CodeWriter {
     @Override
     public String preCode(String methodName) {
         for (CodeWrapperInstance ci : list) {
-            if (ci.methodName != null && 
-                    ci.methodName.replaceAll("/", ".")
-                    .equals(methodName.replaceAll("/", "."))) {
+
+            if (ci.methodName != null &&
+                    ci.methodName.replace("/", ".")
+                    .equals(methodName.replace("/", "."))) {
                 return ci.pre;
             }
         }
@@ -66,7 +67,9 @@ class CodeWrapper implements CodeWriter {
     @Override
     public String postCode(String methodName) {
         for (CodeWrapperInstance ci : list) {
-            if (ci.methodName != null && ci.methodName.equals(methodName)) {
+            if (ci.methodName != null &&
+                    ci.methodName.replace("/", ".")
+                    .equals(methodName.replace("/", "."))) {
                 return ci.post;
             }
         }
@@ -76,7 +79,7 @@ class CodeWrapper implements CodeWriter {
     @Override
     public Iterable<String> newMethods(String className) {
         List<String> res = new ArrayList<String>();
-        
+
         for (CodeWrapperInstance ci : list) {
             if (ci.className != null && ci.className.equals(className) && ci.aNew) {
                 res.add(ci.className);
@@ -91,7 +94,7 @@ class CodeWrapper implements CodeWriter {
         public String pre;
         public String post;
         public boolean aNew;
-        
+
         public CodeWrapperInstance() {
         }
 
@@ -103,5 +106,5 @@ class CodeWrapper implements CodeWriter {
             this.aNew = aNew;
         }
     }
-    
+
 }
