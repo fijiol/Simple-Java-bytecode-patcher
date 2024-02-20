@@ -7,7 +7,11 @@
 package org.sjbcp.code;
 
 import org.sjbcp.impl.SJBCP;
+
+import java.io.IOException;
 import java.lang.instrument.ClassFileTransformer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import javassist.ClassPool;
 import javassist.CtBehavior;
@@ -15,10 +19,9 @@ import javassist.CtClass;
 import javassist.CtField;
 import javassist.Modifier;
 
+import javax.tools.ToolProvider;
+
 public class Transformer implements ClassFileTransformer {
-    private static boolean traceClasses = false;
-    private static boolean traceMethods = false;
-            
     private final SJBCP sjbcp;
     
     private final CodeWriter codeWriter;
@@ -36,7 +39,7 @@ public class Transformer implements ClassFileTransformer {
             Class clazz, java.security.ProtectionDomain domain,
             byte[] bytes) {
 
-        if (traceClasses) {
+        if (SJBCP.traceClasses) {
             SJBCP.println(">> " + className);
         }
         
@@ -44,13 +47,13 @@ public class Transformer implements ClassFileTransformer {
             return bytes;
         }
         
-        if (traceClasses) {
-            SJBCP.println(">> " + className + " will be instrumented!");
+        if (SJBCP.traceClasses) {
+            SJBCP.println(">> " + className + " will be instrumented! source=" + domain.getCodeSource());
         }
         
         return doClass(className, clazz, bytes);
-    }  
-    
+    }
+
     public byte[] doClass(String className, Class clazz, byte[] b) {
         try {
             ClassPool pool = ClassPool.getDefault();
@@ -67,7 +70,7 @@ public class Transformer implements ClassFileTransformer {
                 if (cl.isInterface() == false) {
 
                     for (String varDeclaration : codeWriter.classNewFields(className)) { 
-                        if (traceClasses) {
+                        if (SJBCP.traceClasses) {
                             SJBCP.println(">> " + className + " will have new field " + varDeclaration);
                         }
                         
@@ -87,7 +90,7 @@ public class Transformer implements ClassFileTransformer {
                     CtBehavior[] methods = cl.getDeclaredBehaviors();
 
                     for (CtBehavior method : methods) {
-                        if (traceMethods) {
+                        if (SJBCP.traceMethods) {
                             SJBCP.println(">>> " + className + " go over method " + method.getLongName());
                         }
                         
@@ -106,7 +109,7 @@ public class Transformer implements ClassFileTransformer {
                                 method.insertAfter(post);
                             }
 
-                            if (traceMethods && (pre != null && pre.length() > 0 || post != null && post.length() > 0)) {
+                            if (SJBCP.traceMethods && (pre != null && pre.length() > 0 || post != null && post.length() > 0)) {
                                 SJBCP.println(">>> " + className + " method " + method.getLongName() + " will be instrumented.");
                             }
                         }

@@ -21,8 +21,8 @@ class CodeWrapper implements CodeWriter {
     public CodeWrapper() {
     }
 
-    public void addEntry(String className, String methodName, String pre, String post, boolean isNew) {
-        list.add(new CodeWrapperInstance(className, methodName, pre, post, isNew));
+    public void addEntry(String className, String methodName, String pre, String post) {
+        list.add(new CodeWrapperInstance(className, methodName, pre, post));
     }
 
     public void addEntry(CodeWrapperInstance cwi) {
@@ -37,9 +37,7 @@ class CodeWrapper implements CodeWriter {
     @Override
     public boolean needInstrument(String className) {
         for (CodeWrapperInstance ci : list) {
-            if (ci.className != null &&
-                    ci.className.replace("/", ".")
-                    .equals(className.replace("/", ".")) && !ci.aNew) {
+            if (ci.matchClassName(className)) {
                 return true;
             }
         }
@@ -54,11 +52,9 @@ class CodeWrapper implements CodeWriter {
     @Override
     public String preCode(String methodName) {
         for (CodeWrapperInstance ci : list) {
-
-            if (ci.methodName != null &&
-                    ci.methodName.replace("/", ".")
-                    .equals(methodName.replace("/", "."))) {
-                return ci.pre;
+            if (ci.matchMethodName(methodName)) {
+                if (ci.pre == null) return null;
+                return ci.pre.replaceAll("%METHOD%", methodName);
             }
         }
         return null;
@@ -67,43 +63,43 @@ class CodeWrapper implements CodeWriter {
     @Override
     public String postCode(String methodName) {
         for (CodeWrapperInstance ci : list) {
-            if (ci.methodName != null &&
-                    ci.methodName.replace("/", ".")
-                    .equals(methodName.replace("/", "."))) {
-                return ci.post;
+            if (ci.matchMethodName(methodName)) {
+                if (ci.post == null) return null;
+                return ci.post.replaceAll("%METHOD%", methodName);
             }
         }
         return null;
     }
 
-    @Override
-    public Iterable<String> newMethods(String className) {
-        List<String> res = new ArrayList<String>();
+    public static final class CodeWrapperInstance {
+        public final String className;
+        public final int classNamePrefixLen;
+        public final String methodName;
+        public final int methodNamePrefixLen;
+        public final String pre;
+        public final String post;
 
-        for (CodeWrapperInstance ci : list) {
-            if (ci.className != null && ci.className.equals(className) && ci.aNew) {
-                res.add(ci.className);
-            }
-        }
-        return res;
-    }
-
-    public static class CodeWrapperInstance {
-        public String className;
-        public String methodName;
-        public String pre;
-        public String post;
-        public boolean aNew;
-
-        public CodeWrapperInstance() {
-        }
-
-        private CodeWrapperInstance(String className, String methodName, String pre, String post, boolean aNew) {
-            this.className = className;
-            this.methodName = methodName;
+        private CodeWrapperInstance(String className, String methodName, String pre, String post) {
+            methodName = methodName.replace('.', '/');
+            className = className.replace('.', '/');
+            this.classNamePrefixLen = className.indexOf('*');
+            this.className = classNamePrefixLen >= 0 ? className.substring(0, classNamePrefixLen) : className;
+            this.methodNamePrefixLen = methodName.indexOf('*');
+            this.methodName = methodNamePrefixLen >= 0 ? methodName.substring(0, methodNamePrefixLen) : methodName;
             this.pre = pre;
             this.post = post;
-            this.aNew = aNew;
+        }
+
+        public boolean matchClassName(String className) {
+            if (className == null) return false;
+            if (this.className == null) return false;
+            return classNamePrefixLen >= 0 ? this.className.equals(className.substring(0, Math.min(classNamePrefixLen, className.length()))) : this.className.equals(className);
+        }
+
+        public boolean matchMethodName(String methodName) {
+            if (methodName == null) return false;
+            if (this.methodName == null) return false;
+            return methodNamePrefixLen >= 0 ? this.methodName.equals(methodName.substring(0, Math.min(methodNamePrefixLen, methodName.length()))) : this.methodName.equals(methodName);
         }
     }
 

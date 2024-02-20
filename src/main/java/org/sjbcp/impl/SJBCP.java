@@ -6,21 +6,28 @@
  */
 package org.sjbcp.impl;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.lang.instrument.Instrumentation;
 import java.lang.instrument.UnmodifiableClassException;
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javassist.ClassPool;
 import org.sjbcp.code.CodeWriter;
 import org.sjbcp.code.Transformer;
 
 public class SJBCP {
+
+    public static boolean traceClasses = false;
+    public static boolean traceMethods = false;
 
     public static void println(String str) {
         print(str + "\n");
@@ -40,128 +47,110 @@ public class SJBCP {
     }
     
     public static void main(String[] args) {
-        SJBCP.println("jfPath.jar doesn't have now functional main method. Please rerun your application as:\n\t"
-                + "java -javaagent:jfPath.jar -jar yourapp.jar");
+        SJBCP.println("sjbcp.jar doesn't have now functional main method. Please rerun your application as:\n\t"
+                + "java -javaagent:sjbcp.jar -jar yourapp.jar\n\n"
+                + "For full documentation please read https://github.com/fijiol/Simple-Java-bytecode-patcher/blob/master/README.md");
         System.exit(1);
     }
 
-    private static String printKeys(String[] keys) {
-        StringBuilder sb = new StringBuilder();
-        for (String s : keys) {
-            if (sb.length() > 0) {
-                sb.append(" | ");
-            }
-            sb.append(s);
-        }
-        return sb.toString();
-    }
-    
-    private static String printKeys(String[] keys, int align) {
-        String st = printKeys(keys);
-        return st + String.format("%0" + Math.max(1, align - st.length()) + "d", 0).replace('0', ' ');
-    }
-    
-    public static void printHelpAndExit() {
-        SJBCP.println("Usage:");
-        printHelpParameters();
-                
-        SJBCP.println("\n");
-        SJBCP.println("Please rerun application with proper CLI options.\n");
-        
-        System.exit(1);
-    }
-
-    public static void printHelpParameters() {
-    }
-    
-    public static ConcurrentHashMap<String, SJBCP> jRTWorkers = new ConcurrentHashMap<String, SJBCP>();
-    
     public void premain(String agentArgument, Instrumentation instrumentation) {
         parseArguments(agentArgument, codeWrapper);
-        
-        jRTWorkers.put("1", this);
-        
         instrument(agentArgument, instrumentation);
-        
-        
-        //Some temporary place to print collected statistic.
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-
-            @Override
-            public void run() {
-                //TODO move/remove/improve
-                SJBCP.println("***************************************************************");
-                SJBCP.println(" AGENT FINISHED ");
-                SJBCP.println("***************************************************************");
-            }
-
-        });
-
-        if (true)
-        (new Thread(
-        new Runnable() {
-
-            @Override
-            public void run() {
-                while (true) {
-                    try {
-                        SJBCP.println("I'm still alive");
-                        Thread.sleep(3999);
-                    } catch (InterruptedException ex) {
-                        SJBCP.println(ex.toString());
-                    }
-                }
-            }
-        })).start();
-        
     }
 
+    private static String readFile(String fileName) {
+        try {
+            Path filePath = Paths.get(fileName);
+            byte[] fileBytes = Files.readAllBytes(filePath);
+            return new String(fileBytes);
+        } catch (IOException e) {
+            throw new RuntimeException("failed to get content of file '" + fileName + "'.", e);
+        }
+    }
     public void parseArguments(String agentArgument, CodeWriter writer) throws NumberFormatException {
         if (null != agentArgument) {
             /*
             Example
             -javaagent:./jfPath.jar='className::=java.io.IOException,,methodName::=<init>,,pre::= System.out.println("Hi, there!"); ;;className=java.lang.Exception,,'
             */
+            Pattern includePattern = Pattern.compile("@@([^\\[\\]]+)");
+            Matcher matcher = includePattern.matcher(agentArgument);
+            StringBuffer sb = new StringBuffer();
+            while (matcher.find()) {
+                matcher.appendReplacement(sb, readFile(matcher.group(1).trim()));
+            }
+            matcher.appendTail(sb);
+
+            agentArgument = sb.toString();
             
             for (String code : agentArgument.split(";;")) {
+                if (!code.contains(",,") && !code.contains("::=")) {
+                    // this is parameters section
+                    for (String pair : code.split(",")) {
+                        String[] kv = pair.split("=");
+                        String k = kv[0].trim();
+                        if (kv.length < 2) {
+                            throw new RuntimeException("Expecting string '" + pair + "' to be a key=value pair. (k='" + k + "'");
+                        }
+                        String v = kv[1].trim();
+                        if ("traceClasses".equals(k)) {
+                            traceClasses = Boolean.parseBoolean(v);
+                            continue;
+                        }
+                        if ("traceMethods".equals(k)) {
+                            traceMethods = Boolean.parseBoolean(v);
+                            continue;
+                        }
+                        throw new RuntimeException("Bad args: unknown property " + k);
+                    }
+                    continue;
+                }
                 boolean add = false;
                 String className = null;
                 String methodName = null;
                 String pre = null;
                 String post = null;
-                boolean isNew = false;
-                
-                for (String v : code.split(",,")) {
-                    String[] vArr = v.split("::=");
+
+                for (String kv : code.split(",,")) {
+                    String[] vArr = kv.split("::=");
                     
                     if (vArr.length == 2) {
-                        if (vArr[0].equals("className")) {
-                            className = vArr[1];
+                        String k = vArr[0].trim();
+                        String v = vArr[1];
+                        if (k.equals("className")) {
+                            className = v.trim();
                             add = true;
+                            continue;
                         }
-                        if (vArr[0].equals("methodName")) {
-                            methodName = vArr[1];
+                        if (k.equals("methodName")) {
+                            methodName = v.trim();
                             add = true;
+                            continue;
                         }
-                        if (vArr[0].equals("pre")) {
-                            pre = vArr[1];
+                        if (k.equals("pre")) {
+                            pre = v;
                             add = true;
+                            continue;
                         }
-                        if (vArr[0].equals("post")) {
-                            post = vArr[1];
+                        if (k.equals("post")) {
+                            post = v;
                             add = true;
+                            continue;
                         }
-                        if (vArr[0].equals("isNew")) {
-                            isNew = Boolean.valueOf(vArr[1]);
-                            add = true;
+                        if (k.equals("source")) {
+                            if (post != null || pre != null || methodName != null || className != null)
+                                System.err.println("warning: source was set, post/pre patching methods will be ignored, class is going to be redefined entirely: " + className);
+                            defineClass(v);
+                            continue;
                         }
+                        throw new RuntimeException("bad args: " + vArr[0]);
                     } else { 
                         throw new RuntimeException("bad args: " + agentArgument); 
                     }
                 }
                 
                 if (add) {
-                    codeWrapper.addEntry(className, methodName, pre, post, isNew);
+                    codeWrapper.addEntry(className, methodName, pre, post);
                 }
             }
         }
@@ -181,7 +170,7 @@ public class SJBCP {
     untested code to support attaching to existing java process
     */
     private void redeclare(Instrumentation instrumentation, CodeWriter cw) {
-        ArrayList<Class> ac = new ArrayList<Class>();
+        ArrayList<Class> ac = new ArrayList();
         
         for (Class c : instrumentation.getAllLoadedClasses()) {
             final String className = c.getName().replace(".", "/");
@@ -206,15 +195,66 @@ public class SJBCP {
         return jfpatch;
     }
 
-    private static final String[] help = {"-h", "--help", "help", "h"};
+    private static Class systemDefineClass(String className, byte[] bytecode) {
+        try {
+            ClassLoader systemClassLoader = ClassLoader.getSystemClassLoader();
 
-    private static boolean hasKey(String[] list, String key) {
-        for (String s : list) {
-            if (s.equals(key)) {
-                return true;
-            }
+            // Find the defineClass method in the ClassLoader class
+            Method defineClassMethod = null;
+                defineClassMethod = ClassLoader.class.getDeclaredMethod(
+                        "defineClass", String.class, byte[].class, int.class, int.class);
+
+            // Make the defineClass method accessible
+            defineClassMethod.setAccessible(true);
+
+            // Call defineClass method using reflection
+            return (Class<?>) defineClassMethod.invoke(
+                    systemClassLoader, null /* className.replaceAll('/', '.') */, bytecode, 0, bytecode.length);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
-        return false;
     }
-    
+
+    private static void compile(String source) {
+        try {
+            if (System.getProperty("java.version").startsWith("1.")) {
+                Class c = Class.forName("javax.tools.ToolProvider");
+                Method m = c.getDeclaredMethod("getSystemJavaCompiler");
+                m.setAccessible(true);
+                Object javaCompiler = m.invoke(null);
+                Method m2 = javaCompiler.getClass().getDeclaredMethod("run", InputStream.class, OutputStream.class, OutputStream.class, String[].class);
+                m2.invoke(javaCompiler, null, System.out, System.err, new String[] {source});
+            } else {
+                Class c = Class.forName("java.util.spi.ToolProvider");
+                Method m = c.getDeclaredMethod("findFirst", String.class);
+                m.setAccessible(true);
+                Optional o = (Optional)m.invoke(null, "javac");
+                Object javaCompiler = o.get();
+                Method m2 = javaCompiler.getClass().getDeclaredMethod("run", PrintWriter.class, PrintWriter.class, String[].class);
+                m2.invoke(javaCompiler, new PrintWriter(System.out), new PrintWriter(System.err), new String[] {source});
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+    public static void defineClass(String content) {
+        try {
+            Path tempDirectory = Files.createTempDirectory("sjbcp-defineClass");
+
+            Pattern pattern = Pattern.compile("\\bclass\\s+(\\w+)", Pattern.MULTILINE);
+            Matcher matcher = pattern.matcher(content);
+            if (!matcher.find()) {
+                throw new RuntimeException("Failed to find class name in class source = '" + content + "'");
+            }
+            String name = matcher.group(1);
+            String source = tempDirectory + File.separator + name + ".java";
+            Files.write(Paths.get(source), content.getBytes());
+            compile(source);
+            String classfile = tempDirectory + File.separator + name + ".class";
+            byte[] bytecode = Files.readAllBytes(Paths.get(classfile));
+            systemDefineClass(name, bytecode);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

@@ -1,8 +1,8 @@
-/*
+/**
  * Written by Fedor Burdun of Azul Systems, and released to the public domain,
  * as explained at http://creativecommons.org/publicdomain/zero/1.0/
- * 
-
+ *
+ * @author Fedor Burdun
  */
 package org.sjbcp.code;
 
@@ -25,7 +25,4 @@ public interface CodeWriter {
     public String preCode(String methodName);
 
     public String postCode(String methodName);
-    
-    public Iterable<String> newMethods(String className);
-    
 }

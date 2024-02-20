@@ -60,7 +60,6 @@ public class Attachermain {
         if (needHelp || null == pid) {
             System.err.println("please, to attach sjbcp to already running application rerun it in next manner:\n\n"
                     + "\tjava -jar sjbcp.jar -pid=<PID of java VM> -agentargs='<args>' \n\n");
-            SJBCP.printHelpParameters();
             System.exit(1);
         }
         
