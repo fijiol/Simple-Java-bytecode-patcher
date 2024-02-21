@@ -65,6 +65,11 @@ public class Transformer implements ClassFileTransformer {
 
             try {
 
+                for (String cp : SJBCP.classPathPrepend.keySet()) {
+                    pool.appendClassPath(cp);
+                    pool.importPackage(SJBCP.classPathPrepend.get(cp));
+                }
+
                 cl = pool.makeClass(new java.io.ByteArrayInputStream(b));
 
                 if (cl.isInterface() == false) {

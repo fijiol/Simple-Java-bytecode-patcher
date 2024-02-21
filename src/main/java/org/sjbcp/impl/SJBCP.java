@@ -10,13 +10,14 @@ import java.io.*;
 import java.lang.instrument.Instrumentation;
 import java.lang.instrument.UnmodifiableClassException;
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.jar.JarFile;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -54,7 +55,7 @@ public class SJBCP {
     }
 
     public void premain(String agentArgument, Instrumentation instrumentation) {
-        parseArguments(agentArgument, codeWrapper);
+        parseArguments(agentArgument, codeWrapper, instrumentation);
         instrument(agentArgument, instrumentation);
     }
 
@@ -67,7 +68,7 @@ public class SJBCP {
             throw new RuntimeException("failed to get content of file '" + fileName + "'.", e);
         }
     }
-    public void parseArguments(String agentArgument, CodeWriter writer) throws NumberFormatException {
+    public void parseArguments(String agentArgument, CodeWriter writer, Instrumentation instrumentation) throws NumberFormatException {
         if (null != agentArgument) {
             /*
             Example
@@ -120,31 +121,33 @@ public class SJBCP {
                         if (k.equals("className")) {
                             className = v.trim();
                             add = true;
-                            continue;
                         }
                         if (k.equals("methodName")) {
                             methodName = v.trim();
                             add = true;
-                            continue;
                         }
                         if (k.equals("pre")) {
                             pre = v;
                             add = true;
-                            continue;
                         }
                         if (k.equals("post")) {
                             post = v;
                             add = true;
-                            continue;
                         }
                         if (k.equals("source")) {
                             if (post != null || pre != null || methodName != null || className != null)
                                 System.err.println("warning: source was set, post/pre patching methods will be ignored, class is going to be redefined entirely: " + className);
-                            defineClass(v);
+                            defineClass(instrumentation, v);
                             continue;
                         }
-                        throw new RuntimeException("bad args: " + vArr[0]);
-                    } else { 
+                        if (k.equals("appendBootClassPath")) {
+                            try {
+                                instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(v.trim(), false));
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                    } else {
                         throw new RuntimeException("bad args: " + agentArgument); 
                     }
                 }
@@ -195,7 +198,7 @@ public class SJBCP {
         return jfpatch;
     }
 
-    private static Class systemDefineClass(String className, byte[] bytecode) {
+    private static Class systemDefineClass(Instrumentation instrumentation, String classPath, String className, byte[] bytecode) {
         try {
             ClassLoader systemClassLoader = ClassLoader.getSystemClassLoader();
 
@@ -210,12 +213,27 @@ public class SJBCP {
             // Call defineClass method using reflection
             return (Class<?>) defineClassMethod.invoke(
                     systemClassLoader, null /* className.replaceAll('/', '.') */, bytecode, 0, bytecode.length);
+
+//            // append to class path approach: (does not work)
+//            //TODO: tested only for JDK11 at the moment.
+//            Field mNativeAgent = instrumentation.getClass().getDeclaredField("mNativeAgent");
+//            mNativeAgent.setAccessible(true);
+//            long mna = (Long)mNativeAgent.get(instrumentation);
+//            Method appendToClassLoaderSearch0 = instrumentation.getClass().getDeclaredMethod("appendToClassLoaderSearch0", long.class, String.class, boolean.class);
+//            appendToClassLoaderSearch0.setAccessible(true);
+//            //instrumentation.appendToBootstrapClassLoaderSearch(classPath); // <!-- need to create a jar file!
+//            System.out.println(">>> mna=" + mna + ", instrumentation=" + instrumentation + ", classPath=" + classPath);
+//            for (Class c : appendToClassLoaderSearch0.getParameterTypes()) {
+//                System.out.println(">>> c=" + c);
+//            }
+//            appendToClassLoaderSearch0.invoke(instrumentation, mna, classPath, true); // <!-- IllegalArgumentException?
+//            return null;
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
-    private static void compile(String source) {
+    private static void compile(String destination, String source) {
         try {
             if (System.getProperty("java.version").startsWith("1.")) {
                 Class c = Class.forName("javax.tools.ToolProvider");
@@ -223,7 +241,7 @@ public class SJBCP {
                 m.setAccessible(true);
                 Object javaCompiler = m.invoke(null);
                 Method m2 = javaCompiler.getClass().getDeclaredMethod("run", InputStream.class, OutputStream.class, OutputStream.class, String[].class);
-                m2.invoke(javaCompiler, null, System.out, System.err, new String[] {source});
+                m2.invoke(javaCompiler, null, System.out, System.err, new String[] {"-d", destination, source});
             } else {
                 Class c = Class.forName("java.util.spi.ToolProvider");
                 Method m = c.getDeclaredMethod("findFirst", String.class);
@@ -231,28 +249,36 @@ public class SJBCP {
                 Optional o = (Optional)m.invoke(null, "javac");
                 Object javaCompiler = o.get();
                 Method m2 = javaCompiler.getClass().getDeclaredMethod("run", PrintWriter.class, PrintWriter.class, String[].class);
-                m2.invoke(javaCompiler, new PrintWriter(System.out), new PrintWriter(System.err), new String[] {source});
+                m2.invoke(javaCompiler, new PrintWriter(System.out), new PrintWriter(System.err), new String[] {"-d", destination, source});
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
-    public static void defineClass(String content) {
-        try {
-            Path tempDirectory = Files.createTempDirectory("sjbcp-defineClass");
 
-            Pattern pattern = Pattern.compile("\\bclass\\s+(\\w+)", Pattern.MULTILINE);
-            Matcher matcher = pattern.matcher(content);
-            if (!matcher.find()) {
-                throw new RuntimeException("Failed to find class name in class source = '" + content + "'");
-            }
-            String name = matcher.group(1);
+    private static String findRegex(String regex, String content) {
+        Pattern pattern = Pattern.compile(regex, Pattern.MULTILINE);
+        Matcher matcher = pattern.matcher(content);
+        if (!matcher.find()) {
+            throw new RuntimeException("Failed to find '" + regex + "' pattern in '" + content + "'");
+        }
+        return matcher.group(1);
+    }
+
+    public static Map<String, String> classPathPrepend = Collections.synchronizedMap(new HashMap<>());
+    public static void defineClass(Instrumentation instrumentation, String content) {
+        try {
+            String pkg = findRegex("\\bpackage\\s+([\\w.]+)\\s*;", content);
+            String name = findRegex("\\bclass\\s+(\\w+)", content);
+            Path tempDirectory = Files.createTempDirectory("sjbcp-defineClass-" + name);
+
             String source = tempDirectory + File.separator + name + ".java";
             Files.write(Paths.get(source), content.getBytes());
-            compile(source);
-            String classfile = tempDirectory + File.separator + name + ".class";
+            compile(tempDirectory.toString(), source);
+            classPathPrepend.put(tempDirectory.toString(), pkg);
+            String classfile = tempDirectory + File.separator + pkg.replace('.', File.separatorChar) + File.separator + name + ".class";
             byte[] bytecode = Files.readAllBytes(Paths.get(classfile));
-            systemDefineClass(name, bytecode);
+            systemDefineClass(instrumentation, tempDirectory.toString(), name, bytecode);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
