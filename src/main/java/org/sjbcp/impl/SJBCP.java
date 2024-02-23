@@ -15,6 +15,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.ProtectionDomain;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarFile;
@@ -23,6 +24,7 @@ import java.util.regex.Pattern;
 
 import javassist.ClassPool;
 import org.sjbcp.code.CodeWriter;
+import org.sjbcp.code.TransformationVisitor;
 import org.sjbcp.code.Transformer;
 
 public class SJBCP {
@@ -52,6 +54,21 @@ public class SJBCP {
                 + "java -javaagent:sjbcp.jar -jar yourapp.jar\n\n"
                 + "For full documentation please read https://github.com/fijiol/Simple-Java-bytecode-patcher/blob/master/README.md");
         System.exit(1);
+    }
+
+    private static List<TransformationVisitor> visitors = new ArrayList<>();
+    public static byte[] beforeTransformation(ClassLoader loader, String className, Class clazz, ProtectionDomain domain, byte[] bytes) {
+        for (TransformationVisitor v : visitors) {
+            bytes = v.beforeTransformation(loader, className, clazz, domain, bytes);
+        }
+        return bytes;
+    }
+
+    public static byte[] afterTransformation(ClassLoader loader, String className, Class clazz, ProtectionDomain domain, byte[] bytes) {
+        for (TransformationVisitor v : visitors) {
+            bytes = v.afterTransformation(loader, className, clazz, domain, bytes);
+        }
+        return bytes;
     }
 
     public void premain(String agentArgument, Instrumentation instrumentation) {
@@ -112,9 +129,40 @@ public class SJBCP {
                 String pre = null;
                 String post = null;
 
-                for (String kv : code.split(",,")) {
+                String[] codeSplit = code.split(",,");
+                if (codeSplit.length == 1) {
+                    String kv = codeSplit[0];
                     String[] vArr = kv.split("::=");
-                    
+                    if (vArr.length == 2) {
+                        String k = vArr[0].trim();
+                        String v = vArr[1];
+                        if (k.equals("source")) {
+                            defineClass(instrumentation, v);
+                            continue;
+                        }
+                        if (k.equals("visitor")) {
+                            Class<TransformationVisitor> c = defineClass(instrumentation, v);
+                            try {
+                                visitors.add(c.newInstance());
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                            continue;
+                        }
+                        if (k.equals("appendBootClassPath")) {
+                            try {
+                                instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(v.trim(), false));
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                            continue;
+                        }
+                    }
+                    throw new RuntimeException("bad arg: " + kv);
+                } else
+                for (String kv : codeSplit) {
+                    String[] vArr = kv.split("::=");
+
                     if (vArr.length == 2) {
                         String k = vArr[0].trim();
                         String v = vArr[1];
@@ -133,19 +181,6 @@ public class SJBCP {
                         if (k.equals("post")) {
                             post = v;
                             add = true;
-                        }
-                        if (k.equals("source")) {
-                            if (post != null || pre != null || methodName != null || className != null)
-                                System.err.println("warning: source was set, post/pre patching methods will be ignored, class is going to be redefined entirely: " + className);
-                            defineClass(instrumentation, v);
-                            continue;
-                        }
-                        if (k.equals("appendBootClassPath")) {
-                            try {
-                                instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(v.trim(), false));
-                            } catch (Exception e) {
-                                throw new RuntimeException(e);
-                            }
                         }
                     } else {
                         throw new RuntimeException("bad args: " + agentArgument); 
@@ -266,7 +301,7 @@ public class SJBCP {
     }
 
     public static Map<String, String> classPathPrepend = Collections.synchronizedMap(new HashMap<>());
-    public static void defineClass(Instrumentation instrumentation, String content) {
+    public static Class defineClass(Instrumentation instrumentation, String content) {
         try {
             String pkg = findRegex("\\bpackage\\s+([\\w.]+)\\s*;", content);
             String name = findRegex("\\bclass\\s+(\\w+)", content);
@@ -278,7 +313,7 @@ public class SJBCP {
             classPathPrepend.put(tempDirectory.toString(), pkg);
             String classfile = tempDirectory + File.separator + pkg.replace('.', File.separatorChar) + File.separator + name + ".class";
             byte[] bytecode = Files.readAllBytes(Paths.get(classfile));
-            systemDefineClass(instrumentation, tempDirectory.toString(), name, bytecode);
+            return systemDefineClass(instrumentation, tempDirectory.toString(), name, bytecode);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

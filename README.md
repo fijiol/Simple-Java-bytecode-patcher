@@ -15,7 +15,7 @@ In the `<params>` string, occurrences of `@@<file-name>` will be replaced with t
 
 
 ```
-  <params> ::= <params> ";;" <params> | <properties> | <append-boot-classpath> | <patch-method> | <new-class>
+  <params> ::= <params> ";;" <params> | <properties> | <append-boot-classpath> | <patch-method> | <new-class> | <visitor>
   <properties> ::= <properties> "," <properties> | <allowed-property-key> "=" <boolean-property-value>
   <allowed-property-key> ::= "traceClasses" | "traceMethods"
   <append-boot-classpath> ::= "appendBootClassPath" "::=" <dir-or-jar>
@@ -25,6 +25,7 @@ In the `<params>` string, occurrences of `@@<file-name>` will be replaced with t
   <prepend-code> ::= "pre" "::=" <java-code>
   <append-code> ::= "post" "::=" <java-code>
   <new-class> ::= "source" "::=" <class-source-to-be-compiled-and-loaded-at-runtime>
+  <visitor> ::= "visitor" "::=" <class-source-with-custom-transformer>
 ```
 
 ## Build
@@ -75,3 +76,37 @@ Application command line:
 java -javaagent:./sjbcp.jar='@@config.in ;; className::=com/your/Class,,methdoName::=com.your.Class.getNumber(int),,pre::= A.logMethod("%METHOD%");' -jar YOURAPP.jar
 ```
 
+### Custom transformer / reporter
+
+```
+visitor ::=
+
+	package com.azul.runtime;
+
+	import java.security.ProtectionDomain;
+	import java.nio.file.Files;
+	import java.nio.file.Path;
+	import java.nio.file.Paths;
+
+	public class MyVisitor implements org.sjbcp.code.TransformationVisitor {
+		public byte[] beforeTransformation(ClassLoader loader, String className, Class clazz, ProtectionDomain domain, byte[] bytes) {
+            System.out.println(">> before hi");
+			return bytes;
+		}
+		public byte[] afterTransformation(ClassLoader loader, String className, Class clazz, ProtectionDomain domain, byte[] bytes) {
+            System.out.println(">> after hi");
+			try {
+				Files.write(Paths.get(className.replace('/', '.') + ".after-transformation.class"), bytes);
+			} catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+			return bytes;
+		}
+	}
+
+;;
+className ::= A ,,
+methodName ::= * ,,
+pre ::=
+	System.out.println(">>> hi there");
+```
