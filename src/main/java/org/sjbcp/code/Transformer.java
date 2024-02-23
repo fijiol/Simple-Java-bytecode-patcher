@@ -50,8 +50,11 @@ public class Transformer implements ClassFileTransformer {
         if (SJBCP.traceClasses) {
             SJBCP.println(">> " + className + " will be instrumented! source=" + domain.getCodeSource());
         }
-        
-        return doClass(className, clazz, bytes);
+
+        bytes = SJBCP.beforeTransformation(loader, className, clazz, domain, bytes);
+        bytes = doClass(className, clazz, bytes);
+        bytes = SJBCP.afterTransformation(loader, className, clazz, domain, bytes);
+        return bytes;
     }
 
     public byte[] doClass(String className, Class clazz, byte[] b) {
