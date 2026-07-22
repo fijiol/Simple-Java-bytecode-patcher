@@ -41,7 +41,7 @@ To build the project, execute the following command, which will generate sjbcp.j
 ### One line example
 
 ```
-java -javaagent:./sjbcp.jar='className::=com/your/Class,,methdoName::=com.your.Class.getNumber(int),,pre::= System.out.println("Code to be called before method); ,,post::= System.out.println("Code to be called after method");' -jar YOURAPP.jar
+java -javaagent:./sjbcp.jar='className::=com/your/Class,,methodName::=com.your.Class.getNumber(int),,pre::= System.out.println("Code to be called before method"); ,,post::= System.out.println("Code to be called after method");' -jar YOURAPP.jar
 ```
 
 ### With configuration in a text file
@@ -57,23 +57,23 @@ traceMethods=true
 
 source ::=
   public class A {
-    private static Map<String, Throwable> stackTraces;
+    private static java.util.Map<String, Throwable> stackTraces = new java.util.concurrent.ConcurrentHashMap<String, Throwable>();
     public static void logMethod(String method) {
-      stackTraces.put(method, new RuntimeException("dummy exception, for stack logging purpose");
+      stackTraces.put(method, new RuntimeException("dummy exception, for stack logging purposes"));
     }
     static {
-      Runtime.getRuntime().addShutdownHook(() -> {
-        for (Throwable t : stackTraces.valueSet()) {
+      Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        for (Throwable t : stackTraces.values()) {
           t.printStackTrace();
         }
-      });
+      }));
     }
   }
 ```
 
 Application command line:
 ```
-java -javaagent:./sjbcp.jar='@@config.in ;; className::=com/your/Class,,methdoName::=com.your.Class.getNumber(int),,pre::= A.logMethod("%METHOD%");' -jar YOURAPP.jar
+java -javaagent:./sjbcp.jar='@@config.in ;; className::=com/your/Class,,methodName::=com.your.Class.getNumber(int),,pre::= A.logMethod("%METHOD%");' -jar YOURAPP.jar
 ```
 
 ### Custom transformer / reporter
